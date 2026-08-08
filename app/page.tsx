@@ -1,14 +1,18 @@
 'use client';
 
-import React, { useState, useMemo, useEffect } from 'react';
-import { ShieldCheck, AlertTriangle, Lock, Sparkles, Download, FileSpreadsheet, FileText } from 'lucide-react';
+import React, { useState, useMemo, useEffect, Suspense } from 'react';
+import { useSearchParams } from 'next/navigation';
+import { ShieldCheck, AlertTriangle, Lock, Sparkles, FileSpreadsheet, FileText } from 'lucide-react';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import Papa from 'papaparse';
+import { STATE_NAMES, getStateConfig } from '@/lib/stateData';
 
 const PRO_STORAGE_KEY = 'family_tax_flow_pro_unlocked';
 
-export default function FamilyTaxFlowApp() {
+function FamilyTaxFlowContent() {
+  const searchParams = useSearchParams();
+  
   // ⚠️ PASTE YOUR LEMON SQUEEZY TEST PAYMENT LINK HERE (keep ?embed=1 at the end)
   const lemonSqueezyCheckoutUrl = "https://buy.stripe.com/test_aFa14n0xk3Ax7rD1Km0x200?embed=1";
 
@@ -42,6 +46,17 @@ export default function FamilyTaxFlowApp() {
   // --- 1. STATE INPUTS ---
   const [filingStatus, setFilingStatus] = useState('MFJ');
   const [stateCode, setStateCode] = useState('VA');
+
+  // Pre-select state if user arrived from a state pSEO page (e.g. /?state=CA)
+  useEffect(() => {
+    const paramState = searchParams.get('state');
+    if (paramState && STATE_NAMES[paramState.toLowerCase()]) {
+      setStateCode(paramState.toUpperCase());
+    }
+  }, [searchParams]);
+
+  // Active state tax configuration metadata
+  const stateConfig = useMemo(() => getStateConfig(stateCode), [stateCode]);
   
   // Income Sliders
   const [primaryW2, setPrimaryW2] = useState(10000);
@@ -68,24 +83,29 @@ export default function FamilyTaxFlowApp() {
     // Stage 2: 401k Match
     const matchMonthly = totalGross * (matchPct / 100);
     
-    // Stage 3: Virginia 529 Credit Cap
-    const va529CapMonthly = stateCode === 'VA' ? 666.67 : 500;
-    const va529TaxSavings = va529CapMonthly * 0.0575;
+    // Stage 3: Dynamic State 529 Deduction Cap
+    const annualCap = filingStatus === 'MFJ' 
+      ? stateConfig.max529DeductionMFJ 
+      : stateConfig.max529DeductionSingle;
+    
+    const state529CapMonthly = stateConfig.has529Deduction ? annualCap / 12 : 0;
+    const state529TaxSavings = state529CapMonthly * stateConfig.stateTaxRateMax;
 
     // Net Summary
-    const totalTaxSaved = totalFsaTaxSavings + va529TaxSavings;
-    const netTakeHome = totalGross - (fsaMonthly + matchMonthly + va529CapMonthly) + totalTaxSaved - (housingCost * 0.2);
+    const totalTaxSaved = totalFsaTaxSavings + state529TaxSavings;
+    const netTakeHome = totalGross - (fsaMonthly + matchMonthly + state529CapMonthly) + totalTaxSaved - (housingCost * 0.2);
 
     return {
       totalGross,
       fsaMonthly,
       totalFsaTaxSavings,
       matchMonthly,
-      va529CapMonthly,
+      state529CapMonthly,
+      state529TaxSavings,
       totalTaxSaved,
       netTakeHome
     };
-  }, [primaryW2, spouseW2, filingStatus, stateCode, hasDepFSA, daycareCost, matchPct, housingCost]);
+  }, [primaryW2, spouseW2, filingStatus, stateConfig, hasDepFSA, daycareCost, matchPct, housingCost]);
 
   // --- 3. CLIENT-SIDE EXPORT HANDLERS ---
   const handleExportCSV = () => {
@@ -107,8 +127,10 @@ export default function FamilyTaxFlowApp() {
       },
       {
         Category: `Step 3: ${stateCode} 529 State Deduction`,
-        Value: `$${calculations.va529CapMonthly.toFixed(0)}/mo`,
-        Details: `Maxes out state tax deduction limit`
+        Value: `$${calculations.state529CapMonthly.toFixed(0)}/mo`,
+        Details: stateConfig.has529Deduction 
+          ? `Maxes out state tax deduction limit (${stateConfig.planName})` 
+          : 'No direct state income tax deduction'
       },
       {
         Category: 'Estimated Net Take-Home Pay',
@@ -147,7 +169,7 @@ export default function FamilyTaxFlowApp() {
 
     doc.setFontSize(9);
     doc.setTextColor(100, 116, 139); // slate-500
-    doc.text(`Filing Status: ${filingStatus} | State: ${stateCode} | Generated locally & privately`, 14, 34);
+    doc.text(`Filing Status: ${filingStatus} | State: ${stateConfig.name} (${stateCode}) | Generated locally & privately`, 14, 34);
 
     // Summary Section Box
     doc.setDrawColor(226, 232, 240);
@@ -166,7 +188,7 @@ export default function FamilyTaxFlowApp() {
       body: [
         ...(hasDepFSA ? [['Step 1', 'Dependent Care FSA', `$${calculations.fsaMonthly.toFixed(0)}/mo`, `Saves ~$${calculations.totalFsaTaxSavings.toFixed(0)}/mo in FICA + Income tax`]] : []),
         ['Step 2', '401(k) Match Capture', `$${calculations.matchMonthly.toFixed(0)}/mo`, `Captures 100% free employer match (${matchPct}%)`],
-        ['Step 3', `${stateCode} 529 State Deduction Cap`, `$${calculations.va529CapMonthly.toFixed(0)}/mo`, 'Maxes state tax deduction limit'],
+        ['Step 3', `${stateCode} 529 State Deduction Cap`, `$${calculations.state529CapMonthly.toFixed(0)}/mo`, stateConfig.has529Deduction ? `Maxes out ${stateConfig.planName} deduction limit` : 'No direct state deduction'],
       ],
       headStyles: { fillColor: [15, 23, 42], textColor: [255, 255, 255] },
       alternateRowStyles: { fillColor: [248, 250, 252] },
@@ -221,7 +243,7 @@ export default function FamilyTaxFlowApp() {
         {/* LEFT COLUMN: INPUT CONTROLS */}
         <section className="lg:col-span-5 space-y-4">
           
-          {/* SECTION 1: PROFILE & STATE */}
+          {/* SECTION 1: PROFILE & DYNAMIC 50-STATE SELECTOR */}
           <div className="bg-white rounded-xl p-5 shadow-sm border border-slate-200 space-y-4">
             <h2 className="text-sm font-semibold text-slate-700 uppercase tracking-wider">1. Household Profile</h2>
             <div className="grid grid-cols-2 gap-4">
@@ -236,16 +258,20 @@ export default function FamilyTaxFlowApp() {
                   <option value="Single">Single / Head of Household</option>
                 </select>
               </div>
+
+              {/* DYNAMIC 50-STATE & DC SELECTOR */}
               <div>
                 <label className="text-xs font-medium text-slate-600 block mb-1">State Residence</label>
                 <select 
-                  value={stateCode} 
-                  onChange={(e) => setStateCode(e.target.value)}
+                  value={stateCode.toLowerCase()} 
+                  onChange={(e) => setStateCode(e.target.value.toUpperCase())}
                   className="w-full bg-slate-50 border border-slate-300 rounded-lg p-2 text-sm font-medium focus:ring-2 focus:ring-blue-500 outline-none"
                 >
-                  <option value="VA">Virginia (VA)</option>
-                  <option value="NY">New York (NY)</option>
-                  <option value="TX">Texas (TX - No Tax)</option>
+                  {Object.entries(STATE_NAMES).map(([code, name]) => (
+                    <option key={code} value={code}>
+                      {name} ({code.toUpperCase()})
+                    </option>
+                  ))}
                 </select>
               </div>
             </div>
@@ -365,9 +391,13 @@ export default function FamilyTaxFlowApp() {
                     <span className="bg-purple-600 text-white text-[10px] font-bold px-1.5 py-0.5 rounded">STEP 3</span>
                     <h4 className="text-sm font-bold text-slate-800">{stateCode} 529 State Deduction Cap</h4>
                   </div>
-                  <p className="text-xs text-slate-500 mt-1">Maxes out state income tax deduction limit.</p>
+                  <p className="text-xs text-slate-500 mt-1">
+                    {stateConfig.has529Deduction 
+                      ? `Maxes out ${stateConfig.planName} state deduction limit.`
+                      : `${stateConfig.name} offers federal tax-free growth with no direct state write-off.`}
+                  </p>
                 </div>
-                <span className="text-sm font-bold text-purple-700">${calculations.va529CapMonthly.toFixed(0)}/mo</span>
+                <span className="text-sm font-bold text-purple-700">${calculations.state529CapMonthly.toFixed(0)}/mo</span>
               </div>
             </div>
 
@@ -420,5 +450,13 @@ export default function FamilyTaxFlowApp() {
 
       </main>
     </div>
+  );
+}
+
+export default function FamilyTaxFlowApp() {
+  return (
+    <Suspense fallback={<div className="min-h-screen bg-slate-50 flex items-center justify-center text-xs text-slate-500 font-medium">Loading Family Tax-Flow Engine...</div>}>
+      <FamilyTaxFlowContent />
+    </Suspense>
   );
 }

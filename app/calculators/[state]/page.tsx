@@ -6,9 +6,9 @@ import Link from 'next/link';
 import { ShieldCheck, ArrowLeft, CheckCircle2, Building2, Calculator } from 'lucide-react';
 
 interface PageProps {
-  params: {
+  params: Promise<{
     state: string;
-  };
+  }>;
 }
 
 // 1. Tell Next.js to pre-render static HTML for all 50 states + DC at build time
@@ -20,7 +20,8 @@ export async function generateStaticParams() {
 
 // 2. Generate dynamic SEO Title and Meta Description for search engines
 export async function generateMetadata({ params }: PageProps): Promise<Metadata> {
-  const stateData = getStateConfig(params.state);
+  const resolvedParams = await params;
+  const stateData = getStateConfig(resolvedParams.state);
   
   const title = `${stateData.name} 529 Tax Deduction & Paycheck Calculator | Family Tax-Flow`;
   const description = stateData.has529Deduction
@@ -39,11 +40,12 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
 }
 
 // 3. Render the State pSEO Landing Page
-export default function StateCalculatorPage({ params }: PageProps) {
-  const stateCode = params.state.toLowerCase();
+export default async function StateCalculatorPage({ params }: PageProps) {
+  const resolvedParams = await params;
+  const stateCode = resolvedParams.state ? resolvedParams.state.toLowerCase() : '';
   
   // Validate if the route parameter is a valid U.S. state
-  if (!STATE_NAMES[stateCode]) {
+  if (!stateCode || !STATE_NAMES[stateCode]) {
     notFound();
   }
 

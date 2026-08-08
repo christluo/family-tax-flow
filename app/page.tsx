@@ -1,11 +1,46 @@
 'use client';
 
-import React, { useState, useMemo } from 'react';
-import { ShieldCheck, AlertTriangle } from 'lucide-react';
+import React, { useState, useMemo, useEffect } from 'react';
+import { ShieldCheck, AlertTriangle, Lock, Sparkles, Download, FileSpreadsheet, FileText } from 'lucide-react';
+import jsPDF from 'jspdf';
+import autoTable from 'jspdf-autotable';
+import Papa from 'papaparse';
+
+const PRO_STORAGE_KEY = 'family_tax_flow_pro_unlocked';
 
 export default function FamilyTaxFlowApp() {
+  // ⚠️ PASTE YOUR LEMON SQUEEZY TEST PAYMENT LINK HERE (keep ?embed=1 at the end)
+  const lemonSqueezyCheckoutUrl = "https://buy.stripe.com/test_aFa14n0xk3Ax7rD1Km0x200?embed=1";
+
+  // --- PRO STATE & LEMON SQUEEZY SETUP ---
+  const [isPro, setIsPro] = useState(false);
+
+  // 1. Check local storage on initial load
+  useEffect(() => {
+    if (localStorage.getItem(PRO_STORAGE_KEY) === 'true') {
+      setIsPro(true);
+    }
+  }, []);
+
+  // 2. Listen for Lemon Squeezy checkout completion event
+  useEffect(() => {
+    const handleLemonSqueezyEvent = (event: MessageEvent) => {
+      if (
+        event.data &&
+        typeof event.data === 'object' &&
+        event.data.event === 'Checkout.Success'
+      ) {
+        localStorage.setItem(PRO_STORAGE_KEY, 'true');
+        setIsPro(true);
+      }
+    };
+
+    window.addEventListener('message', handleLemonSqueezyEvent);
+    return () => window.removeEventListener('message', handleLemonSqueezyEvent);
+  }, []);
+
   // --- 1. STATE INPUTS ---
-  const [filingStatus, setFilingStatus] = useState('MFJ'); // 'MFJ' | 'Single'
+  const [filingStatus, setFilingStatus] = useState('MFJ');
   const [stateCode, setStateCode] = useState('VA');
   
   // Income Sliders
@@ -20,14 +55,14 @@ export default function FamilyTaxFlowApp() {
   const [daycareCost, setDaycareCost] = useState(1500);
   const [housingCost, setHousingCost] = useState(2800);
 
-  // --- 2. CALCULATIONS ENGINE (client-side memoized) ---
+  // --- 2. CALCULATIONS ENGINE ---
   const calculations = useMemo(() => {
     const totalGross = primaryW2 + (filingStatus === 'MFJ' ? spouseW2 : 0);
     
     // Stage 1: FSA FICA Bypass
     const fsaMonthly = hasDepFSA ? Math.min(daycareCost, 625) : 0;
     const ficaSavings = fsaMonthly * 0.0765;
-    const incTaxSavings = fsaMonthly * 0.22; // Est 22% bracket
+    const incTaxSavings = fsaMonthly * 0.22;
     const totalFsaTaxSavings = ficaSavings + incTaxSavings;
     
     // Stage 2: 401k Match
@@ -35,7 +70,7 @@ export default function FamilyTaxFlowApp() {
     
     // Stage 3: Virginia 529 Credit Cap
     const va529CapMonthly = stateCode === 'VA' ? 666.67 : 500;
-    const va529TaxSavings = va529CapMonthly * 0.0575; // 5.75% state tax rate
+    const va529TaxSavings = va529CapMonthly * 0.0575;
 
     // Net Summary
     const totalTaxSaved = totalFsaTaxSavings + va529TaxSavings;
@@ -52,17 +87,131 @@ export default function FamilyTaxFlowApp() {
     };
   }, [primaryW2, spouseW2, filingStatus, stateCode, hasDepFSA, daycareCost, matchPct, housingCost]);
 
+  // --- 3. CLIENT-SIDE EXPORT HANDLERS ---
+  const handleExportCSV = () => {
+    const csvData = [
+      {
+        Category: 'Household Gross Monthly Income',
+        Value: `$${calculations.totalGross.toLocaleString()}`,
+        Details: `Primary: $${primaryW2.toLocaleString()} | Spouse: $${filingStatus === 'MFJ' ? spouseW2.toLocaleString() : 0}`
+      },
+      {
+        Category: 'Step 1: Dependent Care FSA',
+        Value: `$${calculations.fsaMonthly.toFixed(0)}/mo`,
+        Details: `Estimated Monthly Tax Savings: $${calculations.totalFsaTaxSavings.toFixed(0)}`
+      },
+      {
+        Category: 'Step 2: 401(k) Match Capture',
+        Value: `$${calculations.matchMonthly.toFixed(0)}/mo`,
+        Details: `Captures 100% free employer match (${matchPct}%)`
+      },
+      {
+        Category: `Step 3: ${stateCode} 529 State Deduction`,
+        Value: `$${calculations.va529CapMonthly.toFixed(0)}/mo`,
+        Details: `Maxes out state tax deduction limit`
+      },
+      {
+        Category: 'Estimated Net Take-Home Pay',
+        Value: `$${calculations.netTakeHome.toLocaleString('en-US', { maximumFractionDigits: 0 })}/mo`,
+        Details: 'Post pre-tax deductions and estimated tax savings'
+      },
+      {
+        Category: 'Total Monthly Tax Savings',
+        Value: `$${calculations.totalTaxSaved.toFixed(0)}/mo`,
+        Details: 'Combined FICA + Federal Income + State tax savings'
+      }
+    ];
+
+    const csv = Papa.unparse(csvData);
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.setAttribute('href', url);
+    link.setAttribute('download', `Family_Tax_Flow_Action_Plan_${stateCode}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  const handleExportPDF = () => {
+    const doc = new jsPDF();
+
+    // Document Header
+    doc.setFontSize(20);
+    doc.setTextColor(15, 23, 42); // slate-900
+    doc.text('Family Tax-Flow Engine', 14, 20);
+
+    doc.setFontSize(12);
+    doc.setTextColor(71, 85, 105); // slate-600
+    doc.text('Monthly Paycheck-to-Wealth Action Plan', 14, 27);
+
+    doc.setFontSize(9);
+    doc.setTextColor(100, 116, 139); // slate-500
+    doc.text(`Filing Status: ${filingStatus} | State: ${stateCode} | Generated locally & privately`, 14, 34);
+
+    // Summary Section Box
+    doc.setDrawColor(226, 232, 240);
+    doc.setFillColor(248, 250, 252);
+    doc.roundedRect(14, 40, 182, 24, 3, 3, 'FD');
+
+    doc.setFontSize(10);
+    doc.setTextColor(15, 23, 42);
+    doc.text(`Est. Net Take-Home Pay: $${calculations.netTakeHome.toLocaleString('en-US', { maximumFractionDigits: 0 })}/mo`, 20, 50);
+    doc.text(`Est. Monthly Tax Savings: $${calculations.totalTaxSaved.toFixed(0)}/mo`, 20, 58);
+
+    // Action Plan Waterfall Table
+    autoTable(doc, {
+      startY: 70,
+      head: [['Order', 'Allocation Target', 'Monthly Amount', 'Tax Impact / Notes']],
+      body: [
+        ...(hasDepFSA ? [['Step 1', 'Dependent Care FSA', `$${calculations.fsaMonthly.toFixed(0)}/mo`, `Saves ~$${calculations.totalFsaTaxSavings.toFixed(0)}/mo in FICA + Income tax`]] : []),
+        ['Step 2', '401(k) Match Capture', `$${calculations.matchMonthly.toFixed(0)}/mo`, `Captures 100% free employer match (${matchPct}%)`],
+        ['Step 3', `${stateCode} 529 State Deduction Cap`, `$${calculations.va529CapMonthly.toFixed(0)}/mo`, 'Maxes state tax deduction limit'],
+      ],
+      headStyles: { fillColor: [15, 23, 42], textColor: [255, 255, 255] },
+      alternateRowStyles: { fillColor: [248, 250, 252] },
+      margin: { left: 14, right: 14 }
+    });
+
+    // Footer Disclaimer
+    const finalY = (doc as any).lastAutoTable.finalY || 120;
+    doc.setFontSize(8);
+    doc.setTextColor(148, 163, 184);
+    doc.text('Privacy Notice: This document was calculated 100% locally in your browser. No financial data was transmitted or saved to a server.', 14, finalY + 15);
+
+    doc.save(`Family_Tax_Flow_Action_Plan_${stateCode}.pdf`);
+  };
+
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800 font-sans p-4 md:p-8">
-      {/* HEADER / PRIVACY TRUST BANNER */}
+      {/* HEADER / TRUST BANNER & PRO BUTTON */}
       <header className="max-w-6xl mx-auto mb-6 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 border-b border-slate-200 pb-4">
         <div>
           <h1 className="text-2xl font-bold text-slate-900 tracking-tight">Family Tax-Flow Engine</h1>
           <p className="text-sm text-slate-500">Paycheck-to-Wealth Allocation Router</p>
         </div>
-        <div className="flex items-center gap-2 bg-emerald-50 text-emerald-700 px-3 py-1.5 rounded-full text-xs font-semibold border border-emerald-200">
-          <ShieldCheck className="w-4 h-4" />
-          <span>100% Client-Side Math — Zero Server Data Saved</span>
+        
+        <div className="flex items-center gap-3">
+          <div className="hidden sm:flex items-center gap-2 bg-emerald-50 text-emerald-700 px-3 py-1.5 rounded-full text-xs font-semibold border border-emerald-200">
+            <ShieldCheck className="w-4 h-4" />
+            <span>100% Client-Side Math</span>
+          </div>
+
+          {/* LEMON SQUEEZY UNLOCK BUTTON */}
+          {isPro ? (
+            <span className="flex items-center gap-1.5 bg-emerald-100 text-emerald-800 text-xs font-bold px-3 py-1.5 rounded-lg border border-emerald-300">
+              <Sparkles className="w-3.5 h-3.5 text-emerald-600" />
+              Pro Active
+            </span>
+          ) : (
+            <a
+              href={lemonSqueezyCheckoutUrl}
+              className="lemonsqueezy-button bg-amber-500 hover:bg-amber-600 text-white text-xs font-bold px-4 py-2 rounded-lg transition-colors shadow-sm flex items-center gap-1.5"
+            >
+              <Sparkles className="w-3.5 h-3.5" />
+              Unlock Pro ($29)
+            </a>
+          )}
         </div>
       </header>
 
@@ -220,6 +369,42 @@ export default function FamilyTaxFlowApp() {
                 </div>
                 <span className="text-sm font-bold text-purple-700">${calculations.va529CapMonthly.toFixed(0)}/mo</span>
               </div>
+            </div>
+
+            {/* ACTION PLAN EXPORT BUTTONS (PRO GATED) */}
+            <div className="pt-4 border-t border-slate-100">
+              {isPro ? (
+                <div className="space-y-2">
+                  <div className="text-xs font-semibold text-slate-700 flex items-center justify-between">
+                    <span>Export Pro Action Plan:</span>
+                    <span className="text-emerald-600 font-bold">Unlocked</span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <button
+                      onClick={handleExportPDF}
+                      className="bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold py-2.5 rounded-lg transition-colors flex items-center justify-center gap-1.5 shadow-sm"
+                    >
+                      <FileText className="w-4 h-4 text-blue-400" />
+                      Download PDF
+                    </button>
+                    <button
+                      onClick={handleExportCSV}
+                      className="bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-bold py-2.5 rounded-lg transition-colors flex items-center justify-center gap-1.5 shadow-sm"
+                    >
+                      <FileSpreadsheet className="w-4 h-4 text-emerald-300" />
+                      Download CSV
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <a
+                  href={lemonSqueezyCheckoutUrl}
+                  className="lemonsqueezy-button w-full bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300 text-xs font-bold py-3 rounded-lg transition-colors flex items-center justify-center gap-2 text-center"
+                >
+                  <Lock className="w-4 h-4 text-amber-700" />
+                  Unlock PDF / CSV Export Engine ($29)
+                </a>
+              )}
             </div>
           </div>
 

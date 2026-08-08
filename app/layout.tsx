@@ -17,6 +17,9 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "Family Tax-Flow Engine",
   description: "Paycheck-to-Wealth Allocation Router",
+  verification: {
+    google: '5aDaW9z5hzdDzeUrIZAjh8fvBGcgRp5qbQmS9R2yZrQ', // <-- Paste ONLY your code string here
+  },
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

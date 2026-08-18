@@ -14,7 +14,7 @@ function FamilyTaxFlowContent() {
   const searchParams = useSearchParams();
   
   // ⚠️ PASTE YOUR LEMON SQUEEZY TEST PAYMENT LINK HERE (keep ?embed=1 at the end)
-  const lemonSqueezyCheckoutUrl = "https://buy.stripe.com/test_aFa14n0xk3Ax7rD1Km0x200?embed=1";
+  const lemonSqueezyCheckoutUrl = "https://buy.stripe.com/bJecN5fth90SeP17jm3sI01";
 
   // --- PRO STATE & LEMON SQUEEZY SETUP ---
   const [isPro, setIsPro] = useState(false);
